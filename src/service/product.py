@@ -81,3 +81,29 @@ def add_to_wishlist(user_id: str, product_id: str):
 def remove_from_wishlist(user_id: str, product_id: str):
     db = get_db()
     db.wishlist.delete_one({"user_id": user_id, "product_id": product_id})
+
+def create_product(product_data):
+    db = get_db()
+    # Remove id if it's an empty string or None
+    data = product_data.dict(by_alias=True, exclude_none=True)
+    if "_id" in data and not data["_id"]:
+        del data["_id"]
+    
+    result = db.products.insert_one(data)
+    return db.products.find_one({"_id": result.inserted_id})
+
+def update_product(product_id: str, product_data):
+    db = get_db()
+    if not ObjectId.is_valid(product_id):
+        return None
+    
+    data = product_data.dict(by_alias=True, exclude_none=True)
+    if "_id" in data:
+        del data["_id"]
+        
+    db.products.update_one(
+        {"_id": ObjectId(product_id)},
+        {"$set": data}
+    )
+    return db.products.find_one({"_id": ObjectId(product_id)})
+

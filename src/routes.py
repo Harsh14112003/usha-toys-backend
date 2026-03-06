@@ -1,7 +1,9 @@
 from typing import Annotated, List
+import os
 import jwt
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
+import uuid
 from fastapi.security import OAuth2PasswordRequestForm
 from bson import ObjectId
 
@@ -28,8 +30,11 @@ from service.product import (
     clear_cart,
     get_wishlist,
     add_to_wishlist,
-    remove_from_wishlist
+    remove_from_wishlist,
+    create_product,
+    update_product
 )
+from service.s3 import upload_file_to_s3
 
 router = APIRouter()
 
@@ -207,3 +212,86 @@ async def remove_from_wishlist_route(
 ):
     remove_from_wishlist(current_user.username, product_id)
     return {"message": "Item removed from wishlist"}
+
+
+# --- Admin / Product Management Routes ---
+
+# @router.post("/upload")
+# async def upload_images(
+#     files: List[UploadFile] = File(...),
+# ):
+#     print(files)
+#     urls = []
+#     for file in files:
+#         content = await file.read()
+#         # Generate a unique filename to avoid collisions
+#         ext = os.path.splitext(file.filename)[1]
+#         unique_filename = f"products/{uuid.uuid4()}{ext}"
+        
+#         url = upload_file_to_s3(content, unique_filename, file.content_type)
+#         if url:
+#             urls.append(url)
+#         else:
+#             raise HTTPException(status_code=500, detail=f"Failed to upload {file.filename}")
+    
+#     return {"urls": urls}
+
+@router.post("/upload")
+async def upload_images(files: List[UploadFile] = File(...)):
+    urls = []
+
+    for file in files:
+        try:
+            # Read file content
+            content = await file.read()
+
+            if not content:
+                raise HTTPException(status_code=400, detail=f"{file.filename} is empty")
+
+            # Get file extension safely
+            filename = file.filename or "file"
+            ext = os.path.splitext(filename)[1]
+
+            # Generate unique name
+            unique_filename = f"products/{uuid.uuid4()}{ext}"
+
+            # Upload to S3
+            url = upload_file_to_s3(
+                content,
+                unique_filename,
+                file.content_type or "application/octet-stream"
+            )
+
+            if not url:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to upload {filename}"
+                )
+
+            urls.append(url)
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return {"urls": urls}
+
+@router.post("/products", response_model=Product)
+async def add_product_route(
+    product: Product,
+    # current_user: Annotated[User, Depends(get_current_active_user)], # Add admin check here
+):
+    # In a real app, check if current_user.is_admin
+    new_product = create_product(product)
+    return new_product
+
+@router.put("/products/{product_id}", response_model=Product)
+async def update_product_route(
+    product_id: str,
+    product: Product,
+    # current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    updated = update_product(product_id, product)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return updated
+
