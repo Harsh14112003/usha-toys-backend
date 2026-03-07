@@ -14,6 +14,7 @@ from service.authentication import (
     create_access_token,
     create_refresh_token,
     get_current_active_user,
+    get_user,
     create_user,
     ACCESS_TOKEN_EXPIRE_MINUTES,
     REFRESH_SECRET_KEY,
@@ -124,9 +125,13 @@ async def refresh_token(token_refresh: TokenRefresh):
     access_token = create_access_token(
         data={"sub": username}, expires_delta=access_token_expires
     )
-    # We can also rotate the refresh token here if we want
+    # Rotate the refresh token
     new_refresh_token = create_refresh_token(data={"sub": username})
-    return Token(access_token=access_token, refresh_token=new_refresh_token, token_type="bearer")
+    # Look up the user so we can include it in the response (Token model requires it)
+    user = get_user(username=username)
+    if user is None:
+        raise credentials_exception
+    return Token(access_token=access_token, refresh_token=new_refresh_token, token_type="bearer", user=user)
 
 
 @router.get("/users/me/")
