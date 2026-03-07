@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from bson import ObjectId
 
 from model.authentication import Token, User, UserCreate, TokenRefresh
-from model.product import Product, Category, CartItem, WishlistItem, CartItemResponse, WishlistItemResponse
+from model.product import Product, Category, CartItem, WishlistItem, CartItemResponse, WishlistItemResponse, Order
 from service.authentication import (
     authenticate_user,
     create_access_token,
@@ -35,10 +35,11 @@ from service.product import (
     update_product
 )
 from service.s3 import upload_file_to_s3
+from service.payment import create_razorpay_order, verify_payment
 
 router = APIRouter()
 
-@router.post("/signup", response_model=Token)
+@router.post("/signup")
 async def signup(user_in: UserCreate):
     user = create_user(user_in)
     if not user:
@@ -46,18 +47,31 @@ async def signup(user_in: UserCreate):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User with this username already exists",
         )
+    return {"message": "User created successfully. Please check your email to verify your account before logging in."}
+
+@router.get("/verify-email")
+async def verify_email_route(token: str):
+    from database import get_db
+    db = get_db()
     
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
+    user_dict = db.users.find_one({"verification_token": token})
+    if not user_dict:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token"
+        )
+    
+    db.users.update_one(
+        {"_id": user_dict["_id"]},
+        {
+            "$set": {"is_verified": True},
+            "$unset": {"verification_token": ""}
+        }
     )
-    refresh_token = create_refresh_token(data={"sub": user.username})
-    return Token(
-        access_token=access_token, 
-        refresh_token=refresh_token, 
-        token_type="bearer",
-        user=user
-    )
+    
+    # In a real app, you might want to return an HTML page here,
+    # or redirect the user to a frontend success page.
+    return {"message": "Email verified successfully! You can now log in."}
 
 
 @router.post("/login", response_model=Token)
@@ -213,29 +227,6 @@ async def remove_from_wishlist_route(
     remove_from_wishlist(current_user.username, product_id)
     return {"message": "Item removed from wishlist"}
 
-
-# --- Admin / Product Management Routes ---
-
-# @router.post("/upload")
-# async def upload_images(
-#     files: List[UploadFile] = File(...),
-# ):
-#     print(files)
-#     urls = []
-#     for file in files:
-#         content = await file.read()
-#         # Generate a unique filename to avoid collisions
-#         ext = os.path.splitext(file.filename)[1]
-#         unique_filename = f"products/{uuid.uuid4()}{ext}"
-        
-#         url = upload_file_to_s3(content, unique_filename, file.content_type)
-#         if url:
-#             urls.append(url)
-#         else:
-#             raise HTTPException(status_code=500, detail=f"Failed to upload {file.filename}")
-    
-#     return {"urls": urls}
-
 @router.post("/upload")
 async def upload_images(files: List[UploadFile] = File(...)):
     urls = []
@@ -294,4 +285,41 @@ async def update_product_route(
     if not updated:
         raise HTTPException(status_code=404, detail="Product not found")
     return updated
+
+# --- Payment Routes ---
+
+@router.post("/payments/create-order", response_model=Order)
+async def create_order_route(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+):
+    cart = get_cart(current_user.username)
+    if not cart:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+    
+    subtotal = sum(item["product"]["price"] * item["quantity"] for item in cart)
+    tax = round(subtotal * 0.18)
+    shipping = 0 if subtotal > 999 else 99
+    total = subtotal + tax + shipping
+    
+    order = create_razorpay_order(total, current_user.username, cart)
+    if not order:
+        raise HTTPException(status_code=500, detail="Failed to create Razorpay order")
+    
+    # Return key_id so frontend doesn't have to hardcode it or use env
+    order["razorpay_key_id"] = os.getenv("RAZORPAY_KEY_ID")
+    return order
+
+@router.post("/payments/verify")
+async def verify_payment_route(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    razorpay_order_id: str,
+    razorpay_payment_id: str,
+    razorpay_signature: str
+):
+    success = verify_payment(razorpay_order_id, razorpay_payment_id, razorpay_signature)
+    if success:
+        clear_cart(current_user.username)
+        return {"message": "Payment verified successfully"}
+    else:
+        raise HTTPException(status_code=400, detail="Payment verification failed")
 

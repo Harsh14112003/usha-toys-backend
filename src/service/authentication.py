@@ -5,9 +5,11 @@ import jwt
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jwt.exceptions import InvalidTokenError
+import uuid
 from pwdlib import PasswordHash
 from model.authentication import UserInDB , TokenData , User , Token, UserCreate
 from database import get_db
+from service.email import send_verification_email
 
 
 # to get a string like this run:
@@ -47,6 +49,8 @@ def authenticate_user(username: str, password: str):
         return False
     if not verify_password(password, user.hashed_password):
         return False
+    if not getattr(user, "is_verified", False):
+        raise HTTPException(status_code=400, detail="Email not verified")
     return user
 
 
@@ -60,7 +64,22 @@ def create_user(user_in: UserCreate):
     user_dict.pop("password")
     user_dict["hashed_password"] = hashed_password
     
+    now = datetime.now()
+    user_dict["dateCreated"] = now
+    user_dict["dateModified"] = now
+    user_dict["is_verified"] = False
+    
+    # Generate verification token
+    verification_token = str(uuid.uuid4())
+    user_dict["verification_token"] = verification_token
+    
     db.users.insert_one(user_dict)
+    
+    # Send email (mocked if no SMTP credentials are set)
+    # user_dict["email"] could be None based on the model, but assuming signup provides it.
+    if user_dict.get("email"):
+        send_verification_email(user_dict["email"], verification_token, is_mock=False)
+
     return UserInDB(**user_dict)
 
 
@@ -108,4 +127,6 @@ async def get_current_active_user(
 ):
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
+    if not getattr(current_user, "is_verified", False):
+        raise HTTPException(status_code=400, detail="Email not verified")
     return current_user

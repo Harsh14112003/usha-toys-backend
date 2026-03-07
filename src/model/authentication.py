@@ -1,4 +1,6 @@
 from pydantic import BaseModel
+from datetime import datetime
+from typing import Optional
 
 class User(BaseModel):
     username: str
@@ -6,6 +8,9 @@ class User(BaseModel):
     full_name: str | None = None
     disabled: bool = False
     role: str = "user"
+    dateCreated: Optional[datetime] = None
+    dateModified: Optional[datetime] = None
+    is_verified: bool = False
     
 
 class Token(BaseModel):

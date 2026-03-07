@@ -1,5 +1,6 @@
 from bson import ObjectId
 from database import get_db
+from datetime import datetime
 
 def get_all_products():
     db = get_db()
@@ -37,17 +38,20 @@ def add_to_cart(user_id: str, product_id: str, quantity: int = 1):
             {"$inc": {"quantity": quantity}}
         )
     else:
+        now = datetime.now()
         db.cart.insert_one({
             "user_id": user_id,
             "product_id": product_id,
-            "quantity": quantity
+            "quantity": quantity,
+            "dateCreated": now,
+            "dateModified": now
         })
 
 def update_cart_quantity(user_id: str, product_id: str, quantity: int):
     db = get_db()
     db.cart.update_one(
         {"user_id": user_id, "product_id": product_id},
-        {"$set": {"quantity": quantity}}
+        {"$set": {"quantity": quantity, "dateModified": datetime.now()}}
     )
 
 def remove_from_cart(user_id: str, product_id: str):
@@ -73,9 +77,12 @@ def get_wishlist(user_id: str):
 def add_to_wishlist(user_id: str, product_id: str):
     db = get_db()
     if not db.wishlist.find_one({"user_id": user_id, "product_id": product_id}):
+        now = datetime.now()
         db.wishlist.insert_one({
             "user_id": user_id,
-            "product_id": product_id
+            "product_id": product_id,
+            "dateCreated": now,
+            "dateModified": now
         })
 
 def remove_from_wishlist(user_id: str, product_id: str):
@@ -89,6 +96,10 @@ def create_product(product_data):
     if "_id" in data and not data["_id"]:
         del data["_id"]
     
+    now = datetime.now()
+    data["dateCreated"] = now
+    data["dateModified"] = now
+    
     result = db.products.insert_one(data)
     return db.products.find_one({"_id": result.inserted_id})
 
@@ -101,6 +112,8 @@ def update_product(product_id: str, product_data):
     if "_id" in data:
         del data["_id"]
         
+    data["dateModified"] = datetime.now()
+    
     db.products.update_one(
         {"_id": ObjectId(product_id)},
         {"$set": data}
